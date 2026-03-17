@@ -1,0 +1,56 @@
+// путь в PN для каждого ребра SN
+
+Algorithm:
+
+for each edge s in ES:
+
+    (u, v) = endpoints(s)
+
+    src = map[u]
+    dst = map[v]
+
+    G = copy of PN
+
+    // удаляем перегруженные ребра
+    for each edge e in G:
+        if capacity[e] < demand[s]:
+            remove e from G
+
+    // ищем случайный путь
+    path = RandomPath(G, src, dst)
+
+    if path does not exist:
+        mark s as failed
+        continue
+
+    path_map[s] = path
+
+    // уменьшаем остаточную емкость
+    for each edge e in path:
+        capacity[e] = capacity[e] - demand[s]
+
+return path_map
+
+
+function RandomPath(G, src, dst):
+
+    stack = [src]
+    visited = {}
+
+    while stack not empty:
+
+        v = top(stack)
+
+        if v == dst:
+            return stack as path
+
+        neighbors = all neighbors of v not in visited
+
+        if neighbors is empty:
+            pop(stack)
+        else:
+            choose random node n from neighbors
+            visited.add(n)
+            push n to stack
+
+    return failure
