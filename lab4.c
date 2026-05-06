@@ -341,9 +341,5 @@ int main() {
         matrix_index++;
     }
     
-    printf("\nФайлы сохранены в папке output/\n");
-    printf("Гистограммы: histogram_1.csv, histogram_2.csv\n");
-    printf("Автокорреляции: autocorrelation_1.csv, autocorrelation_2.csv\n");
-    
     return 0;
 }
