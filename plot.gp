@@ -16,6 +16,9 @@ set xlabel 'Бин (интервал)'
 set ylabel 'Частота'
 set title 'Гистограммы распределений для разных матриц'
 
+# Настройка диапазона оси Y
+set yrange [0:3000]
+
 # Настройка легенды
 set key outside right center
 

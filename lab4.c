@@ -10,16 +10,24 @@
 #define CHAIN_LENGTH 500
 #define NUM_CHAINS_FOR_HIST 100
 #define BINS 20
+#define MAX_LAG 50  // Максимальный лаг для автокорреляции
 
 // Глобальный генератор случайных чисел
 static unsigned long long rng_state = 42;
 
 // Простой генератор случайных чисел (xorshift)
 double my_random() {
+    // Предотвращаем нулевое состояние
+    if (rng_state == 0) {
+        rng_state = 42;  // любое ненулевое значение
+    }
+    
     rng_state ^= rng_state >> 12;
     rng_state ^= rng_state << 25;
     rng_state ^= rng_state >> 27;
-    return (double)(rng_state * 0x2545F4914F6CDD1DULL) / (double)(1ULL << 63);
+    
+    // Возвращаем [0, 1) используя старшие биты для лучшего распределения
+    return (double)(rng_state >> 11) / (double)(1ULL << 53);
 }
 
 // Получение начального распределения
@@ -108,6 +116,53 @@ void generate_many_chains(double matrix[NUM_STATES][NUM_STATES], double* distrib
     }
 }
 
+// Вычисление среднего значения
+double calculate_mean(double* values, int length) {
+    double sum = 0.0;
+    for (int i = 0; i < length; i++) {
+        sum += values[i];
+    }
+    return sum / length;
+}
+
+// Вычисление автокорреляции 
+void calculate_autocorrelation(double* x_values, int length, double* autocorr, int max_lag) {
+    double mean = calculate_mean(x_values, length);
+    double variance = 0.0;
+    
+    // Вычисление дисперсии
+    for (int i = 0; i < length; i++) {
+        double diff = x_values[i] - mean;
+        variance += diff * diff;
+    }
+    variance /= length;
+    
+    // Вычисление автокорреляции 
+    for (int k = 0; k <= max_lag && k < length; k++) {
+        double covariance = 0.0;
+        int count = length - k;
+        
+        for (int i = 0; i < count; i++) {
+            covariance += (x_values[i] - mean) * (x_values[i + k] - mean);
+        }
+        covariance /= count;
+        
+        autocorr[k] = covariance / variance;
+    }
+}
+
+// Усреднение автокорреляций по всем цепям
+void average_autocorrelations(double all_autocorr[NUM_CHAINS_FOR_HIST][MAX_LAG + 1], 
+                              double* avg_autocorr, int max_lag) {
+    for (int k = 0; k <= max_lag; k++) {
+        avg_autocorr[k] = 0.0;
+        for (int i = 0; i < NUM_CHAINS_FOR_HIST; i++) {
+            avg_autocorr[k] += all_autocorr[i][k];
+        }
+        avg_autocorr[k] /= NUM_CHAINS_FOR_HIST;
+    }
+}
+
 // Построение гистограммы
 void build_histogram(double* values, int value_count, int* histogram, int bins) {
     // Инициализация гистограммы
@@ -142,10 +197,10 @@ void save_chain_csv(int* states, double* x_values, const char* path) {
         return;
     }
     
-    fprintf(file, "step\tstate\tx\n");
+    fprintf(file, "step,state,x\n");
     
     for (int i = 0; i < CHAIN_LENGTH; i++) {
-        fprintf(file, "%d\t%d\t%.6f\n", i, states[i], x_values[i]);
+        fprintf(file, "%d,%d,%.6f\n", i, states[i], x_values[i]);
     }
     
     fclose(file);
@@ -164,6 +219,23 @@ void save_histogram_csv(int* histogram, int bins, const char* path) {
     for (int i = 0; i < bins; i++) {
         double bin_start = (double)i / bins;
         fprintf(file, "%.4f,%d\n", bin_start, histogram[i]);
+    }
+    
+    fclose(file);
+}
+
+// Сохранение автокорреляции в CSV
+void save_autocorrelation_csv(double* autocorr, int max_lag, const char* path) {
+    FILE* file = fopen(path, "w");
+    if (file == NULL) {
+        printf("Ошибка открытия файла: %s\n", path);
+        return;
+    }
+    
+    fprintf(file, "lag,autocorrelation\n");
+    
+    for (int k = 0; k <= max_lag; k++) {
+        fprintf(file, "%d,%.6f\n", k, autocorr[k]);
     }
     
     fclose(file);
@@ -195,12 +267,17 @@ int main() {
     
     printf("Состояний: %d\n", NUM_STATES);
     printf("Длина цепи: %d\n", CHAIN_LENGTH);
+    printf("Максимальный лаг: %d\n", MAX_LAG);
     
     // Для хранения всех цепей
     int chains_states[NUM_CHAINS_FOR_HIST][CHAIN_LENGTH];
     double chains_x[NUM_CHAINS_FOR_HIST][CHAIN_LENGTH];
     double all_x[NUM_CHAINS_FOR_HIST * CHAIN_LENGTH];
     int all_x_count;
+    
+    // Массивы для автокорреляции
+    double all_autocorr[NUM_CHAINS_FOR_HIST][MAX_LAG + 1];
+    double avg_autocorr[MAX_LAG + 1];
     
     int matrix_index = 1;
     
@@ -212,6 +289,21 @@ int main() {
         generate_many_chains(matrices[m], distribution, 
                             chains_states, chains_x, 
                             all_x, &all_x_count);
+        
+        // Расчёт автокорреляции для каждой цепи
+        for (int i = 0; i < NUM_CHAINS_FOR_HIST; i++) {
+            calculate_autocorrelation(chains_x[i], CHAIN_LENGTH, 
+                                     all_autocorr[i], MAX_LAG);
+        }
+        
+        // Усреднение автокорреляций
+        average_autocorrelations(all_autocorr, avg_autocorr, MAX_LAG);
+        
+        // Вывод автокорреляции
+        printf("Автокорреляция (первые 10 лагов):\n");
+        for (int k = 0; k <= 10 && k <= MAX_LAG; k++) {
+            printf("Лаг %d: %.4f\n", k, avg_autocorr[k]);
+        }
         
         // Построение гистограммы
         int histogram[BINS];
@@ -234,6 +326,11 @@ int main() {
         sprintf(hist_path, "output/histogram_%d.csv", matrix_index);
         save_histogram_csv(histogram, BINS, hist_path);
         
+        // Сохранение автокорреляции
+        char autocorr_path[200];
+        sprintf(autocorr_path, "output/autocorrelation_%d.csv", matrix_index);
+        save_autocorrelation_csv(avg_autocorr, MAX_LAG, autocorr_path);
+        
         // Вывод гистограммы
         printf("Гистограмма:\n");
         for (int i = 0; i < BINS; i++) {
@@ -243,6 +340,10 @@ int main() {
         
         matrix_index++;
     }
+    
+    printf("\nФайлы сохранены в папке output/\n");
+    printf("Гистограммы: histogram_1.csv, histogram_2.csv\n");
+    printf("Автокорреляции: autocorrelation_1.csv, autocorrelation_2.csv\n");
     
     return 0;
 }
